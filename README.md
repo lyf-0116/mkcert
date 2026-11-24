@@ -183,6 +183,8 @@ export NODE_EXTRA_CA_CERTS="$(mkcert -CAROOT)/rootCA.pem"
 
 The CA certificate and its key are stored in an application data folder in the user home. You usually don't have to worry about it, as installation is automated, but the location is printed by `mkcert -CAROOT`.
 
+mkcert checks the permissions of `rootCA-key.pem` when it is created and every time it is loaded. If group or other users can access it, mkcert refuses to use the key and prints a platform-specific repair command. On macOS and Linux the supported fix is `chmod 600 "$(mkcert -CAROOT)/rootCA-key.pem"`; on Windows use the printed `icacls` command to remove broad ACL entries and grant access only to the current user.
+
 If you want to manage separate CAs, you can use the environment variable `$CAROOT` to set the folder where mkcert will place and look for the local CA files.
 
 ### Installing the CA on other systems
