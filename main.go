@@ -162,10 +162,15 @@ type mkcert struct {
 	caCert *x509.Certificate
 	caKey  crypto.PrivateKey
 
-	// The system cert pool is only loaded once. After installing the root, checks
-	// will keep failing until the next execution. TODO: maybe execve?
+	// systemTrustUpdated records the fact that the root was successfully
+	// installed in the system trust store during this execution. It only
+	// suppresses the stale in-process check below; a failed install leaves it
+	// false so the real state keeps being reported.
+	//
+	// The system cert pool is only loaded once. After installing the root,
+	// checks keep failing until the next execution. TODO: maybe execve?
 	// https://github.com/golang/go/issues/24540 (thanks, myself)
-	ignoreCheckFailure bool
+	systemTrustUpdated bool
 }
 
 func (m *mkcert) Run(args []string) {
@@ -271,8 +276,12 @@ func (m *mkcert) install() {
 		} else {
 			if m.installPlatform() {
 				log.Print("The local CA is now installed in the system trust store! ⚡️")
+				// The cert pool is cached for the lifetime of the process, so
+				// checkPlatform() can't observe a successful in-process
+				// install. Record the success as a fact instead; a failed
+				// install must leave it unset so checks don't lie later.
+				m.systemTrustUpdated = true
 			}
-			m.ignoreCheckFailure = true // TODO: replace with a check for a successful install
 		}
 	}
 	if storeEnabled("nss") && hasNSS {
@@ -334,7 +343,10 @@ func (m *mkcert) uninstall() {
 }
 
 func (m *mkcert) checkPlatform() bool {
-	if m.ignoreCheckFailure {
+	// A successful in-process install can't be observed through the cached
+	// system cert pool, so trust the recorded success. A failed install is
+	// not recorded, and the real (negative) check result is returned instead.
+	if m.systemTrustUpdated {
 		return true
 	}
 
