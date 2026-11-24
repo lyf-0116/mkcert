@@ -65,6 +65,11 @@ const advancedUsage = `Advanced options:
 	    Generate a certificate based on the supplied CSR. Conflicts with
 	    all other flags and arguments except -install and -cert-file.
 
+	-allow-missing-server-auth
+	    Allow issuing a certificate without server authentication even
+	    when the local CA is installed in a trust store. Use this for
+	    client-only or S/MIME-only certificates.
+
 	-CAROOT
 	    Print the CA certificate and key storage location.
 
@@ -91,18 +96,19 @@ func main() {
 	}
 	log.SetFlags(0)
 	var (
-		installFlag   = flag.Bool("install", false, "")
-		uninstallFlag = flag.Bool("uninstall", false, "")
-		pkcs12Flag    = flag.Bool("pkcs12", false, "")
-		ecdsaFlag     = flag.Bool("ecdsa", false, "")
-		clientFlag    = flag.Bool("client", false, "")
-		helpFlag      = flag.Bool("help", false, "")
-		carootFlag    = flag.Bool("CAROOT", false, "")
-		csrFlag       = flag.String("csr", "", "")
-		certFileFlag  = flag.String("cert-file", "", "")
-		keyFileFlag   = flag.String("key-file", "", "")
-		p12FileFlag   = flag.String("p12-file", "", "")
-		versionFlag   = flag.Bool("version", false, "")
+		installFlag                = flag.Bool("install", false, "")
+		uninstallFlag              = flag.Bool("uninstall", false, "")
+		pkcs12Flag                 = flag.Bool("pkcs12", false, "")
+		ecdsaFlag                  = flag.Bool("ecdsa", false, "")
+		clientFlag                 = flag.Bool("client", false, "")
+		allowMissingServerAuthFlag = flag.Bool("allow-missing-server-auth", false, "")
+		helpFlag                   = flag.Bool("help", false, "")
+		carootFlag                 = flag.Bool("CAROOT", false, "")
+		csrFlag                    = flag.String("csr", "", "")
+		certFileFlag               = flag.String("cert-file", "", "")
+		keyFileFlag                = flag.String("key-file", "", "")
+		p12FileFlag                = flag.String("p12-file", "", "")
+		versionFlag                = flag.Bool("version", false, "")
 	)
 	flag.Usage = func() {
 		fmt.Fprint(flag.CommandLine.Output(), shortUsage)
@@ -145,7 +151,8 @@ func main() {
 	(&mkcert{
 		installMode: *installFlag, uninstallMode: *uninstallFlag, csrPath: *csrFlag,
 		pkcs12: *pkcs12Flag, ecdsa: *ecdsaFlag, client: *clientFlag,
-		certFile: *certFileFlag, keyFile: *keyFileFlag, p12File: *p12FileFlag,
+		allowMissingServerAuth: *allowMissingServerAuthFlag,
+		certFile:               *certFileFlag, keyFile: *keyFileFlag, p12File: *p12FileFlag,
 	}).Run(flag.Args())
 }
 
@@ -155,6 +162,7 @@ const rootKeyName = "rootCA-key.pem"
 type mkcert struct {
 	installMode, uninstallMode bool
 	pkcs12, ecdsa, client      bool
+	allowMissingServerAuth     bool
 	keyFile, certFile, p12File string
 	csrPath                    string
 
@@ -340,6 +348,43 @@ func (m *mkcert) checkPlatform() bool {
 
 	_, err := m.caCert.Verify(x509.VerifyOptions{})
 	return err == nil
+}
+
+// caIsInstalled reports whether the local CA is installed in any of the
+// enabled trust stores. The extended key usage of a leaf certificate is
+// derived from its hosts, while the trust decision for the root that signs
+// it is controlled separately by -install, so the two have to be reconciled
+// at issuance time.
+func (m *mkcert) caIsInstalled() bool {
+	if storeEnabled("system") && m.checkPlatform() {
+		return true
+	}
+	if storeEnabled("nss") && hasNSS && CertutilInstallHelp != "" && hasCertutil && m.checkNSS() {
+		return true
+	}
+	if storeEnabled("java") && hasJava && hasKeytool && m.checkJava() {
+		return true
+	}
+	return false
+}
+
+// checkServerAuthConsistency makes sure that a certificate issued by a root
+// that is installed in a trust store can actually be used for server
+// authentication. Otherwise the root is trusted by browsers and other TLS
+// clients, but the chain gets rejected for the very purpose the trust store
+// exists to enable. Certificates that are intentionally limited to client
+// authentication or S/MIME can opt out with -allow-missing-server-auth.
+func (m *mkcert) checkServerAuthConsistency(extKeyUsage []x509.ExtKeyUsage) {
+	if m.allowMissingServerAuth || !m.caIsInstalled() {
+		return
+	}
+	for _, eku := range extKeyUsage {
+		if eku == x509.ExtKeyUsageServerAuth {
+			return
+		}
+	}
+	log.Fatalln("ERROR: the local CA is installed in a trust store, so its certificates must include server authentication. " +
+		"Use -allow-missing-server-auth to issue a client-only or S/MIME-only certificate.")
 }
 
 func storeEnabled(name string) bool {

@@ -34,6 +34,14 @@ import (
 
 var userAndHostname string
 
+// oidExtensionExtendedKeyUsage and oidExtKeyUsageServerAuth are the OIDs of
+// the EKU extension and the serverAuthentication key purpose. crypto/x509
+// keeps them unexported, so they are duplicated here to inspect CSRs.
+var (
+	oidExtensionExtendedKeyUsage = asn1.ObjectIdentifier{2, 5, 29, 37}
+	oidExtKeyUsageServerAuth     = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 1}
+)
+
 func init() {
 	u, err := user.Current()
 	if err == nil {
@@ -94,6 +102,8 @@ func (m *mkcert) makeCert(hosts []string) {
 	if len(tpl.EmailAddresses) > 0 {
 		tpl.ExtKeyUsage = append(tpl.ExtKeyUsage, x509.ExtKeyUsageEmailProtection)
 	}
+
+	m.checkServerAuthConsistency(tpl.ExtKeyUsage)
 
 	// IIS (the main target of PKCS #12 files), only shows the deprecated
 	// Common Name in the UI. See issue #115.
@@ -251,6 +261,14 @@ func (m *mkcert) makeCertFromCSR() {
 		tpl.ExtKeyUsage = append(tpl.ExtKeyUsage, x509.ExtKeyUsageEmailProtection)
 	}
 
+	// ExtraExtensions overrides ExtKeyUsage when the CSR carries its own EKU
+	// extension, so base the consistency check on what is actually issued.
+	if eku, ok := csrExtendedKeyUsage(csr); ok {
+		m.checkServerAuthConsistency(eku)
+	} else {
+		m.checkServerAuthConsistency(tpl.ExtKeyUsage)
+	}
+
 	cert, err := x509.CreateCertificate(rand.Reader, tpl, m.caCert, csr.PublicKey, m.caKey)
 	fatalIfErr(err, "failed to generate certificate")
 	c, err := x509.ParseCertificate(cert)
@@ -276,6 +294,40 @@ func (m *mkcert) makeCertFromCSR() {
 	log.Printf("\nThe certificate is at \"%s\" ✅\n\n", certFile)
 
 	log.Printf("It will expire on %s 🗓\n\n", expiration.Format("2 January 2006"))
+}
+
+// csrExtendedKeyUsage returns the key purposes requested by the CSR's EKU
+// extension, if present. Unknown purposes map to the zero value and still
+// keep serverAuthentication detectable.
+func csrExtendedKeyUsage(csr *x509.CertificateRequest) ([]x509.ExtKeyUsage, bool) {
+	for _, ext := range csr.Extensions {
+		if !ext.Id.Equal(oidExtensionExtendedKeyUsage) {
+			continue
+		}
+		var oids []asn1.ObjectIdentifier
+		if _, err := asn1.Unmarshal(ext.Value, &oids); err != nil {
+			return nil, true
+		}
+		eku := make([]x509.ExtKeyUsage, 0, len(oids))
+		for _, oid := range oids {
+			eku = append(eku, ekuFromOID(oid))
+		}
+		return eku, true
+	}
+	return nil, false
+}
+
+func ekuFromOID(oid asn1.ObjectIdentifier) x509.ExtKeyUsage {
+	switch {
+	case oid.Equal(oidExtKeyUsageServerAuth):
+		return x509.ExtKeyUsageServerAuth
+	case oid.Equal(asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 2}):
+		return x509.ExtKeyUsageClientAuth
+	case oid.Equal(asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 4}):
+		return x509.ExtKeyUsageEmailProtection
+	default:
+		return 0
+	}
 }
 
 // loadCA will load or create the CA at CAROOT.

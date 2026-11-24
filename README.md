@@ -145,6 +145,11 @@ To only install the local root CA into a subset of them, you can set the `TRUST_
 	-csr CSR
 	    Generate a certificate based on the supplied CSR. Conflicts with
 	    all other flags and arguments except -install and -cert-file.
+
+	-allow-missing-server-auth
+	    Allow issuing a certificate without server authentication even
+	    when the local CA is installed in a trust store. Use this for
+	    client-only or S/MIME-only certificates.
 ```
 
 > **Note:** You _must_ place these options before the domain names list.
