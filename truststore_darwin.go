@@ -102,10 +102,8 @@ func (m *mkcert) installPlatform() bool {
 	return true
 }
 
-func (m *mkcert) uninstallPlatform() bool {
+func (m *mkcert) uninstallPlatform() error {
 	cmd := commandWithSudo("security", "remove-trusted-cert", "-d", filepath.Join(m.CAROOT, rootName))
 	out, err := cmd.CombinedOutput()
-	fatalIfCmdErr(err, "security remove-trusted-cert", out)
-
-	return true
+	return cmdErr(err, "security remove-trusted-cert", out)
 }

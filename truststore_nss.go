@@ -103,7 +103,11 @@ func (m *mkcert) installNSS() bool {
 	return true
 }
 
-func (m *mkcert) uninstallNSS() {
+func (m *mkcert) uninstallNSS() error {
+	// Keep going through all the profiles even if one fails, to remove
+	// the CA from as many of them as possible, and report the first
+	// error at the end.
+	var firstErr error
 	m.forEachNSSProfile(func(profile string) {
 		err := exec.Command(certutilPath, "-V", "-d", profile, "-u", "L", "-n", m.caUniqueName()).Run()
 		if err != nil {
@@ -111,8 +115,11 @@ func (m *mkcert) uninstallNSS() {
 		}
 		cmd := exec.Command(certutilPath, "-D", "-d", profile, "-n", m.caUniqueName())
 		out, err := execCertutil(cmd)
-		fatalIfCmdErr(err, "certutil -D -d "+profile, out)
+		if err := cmdErr(err, "certutil -D -d "+profile, out); err != nil && firstErr == nil {
+			firstErr = err
+		}
 	})
+	return firstErr
 }
 
 // execCertutil will execute a "certutil" command and if needed re-execute

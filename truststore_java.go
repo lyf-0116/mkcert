@@ -91,7 +91,7 @@ func (m *mkcert) installJava() {
 	fatalIfCmdErr(err, "keytool -importcert", out)
 }
 
-func (m *mkcert) uninstallJava() {
+func (m *mkcert) uninstallJava() error {
 	args := []string{
 		"-delete",
 		"-alias", m.caUniqueName(),
@@ -100,9 +100,9 @@ func (m *mkcert) uninstallJava() {
 	}
 	out, err := execKeytool(exec.Command(keytoolPath, args...))
 	if bytes.Contains(out, []byte("does not exist")) {
-		return // cert didn't exist
+		return nil // cert didn't exist
 	}
-	fatalIfCmdErr(err, "keytool -delete", out)
+	return cmdErr(err, "keytool -delete", out)
 }
 
 // execKeytool will execute a "keytool" command and if needed re-execute

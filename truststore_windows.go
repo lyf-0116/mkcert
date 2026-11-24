@@ -51,19 +51,23 @@ func (m *mkcert) installPlatform() bool {
 	return true
 }
 
-func (m *mkcert) uninstallPlatform() bool {
+func (m *mkcert) uninstallPlatform() error {
 	// We'll just remove all certs with the same serial number
 	// Open root store
 	store, err := openWindowsRootStore()
-	fatalIfErr(err, "open root store")
+	if err != nil {
+		return fmt.Errorf("failed to open root store: %w", err)
+	}
 	defer store.close()
 	// Do the deletion
 	deletedAny, err := store.deleteCertsWithSerial(m.caCert.SerialNumber)
 	if err == nil && !deletedAny {
 		err = fmt.Errorf("no certs found")
 	}
-	fatalIfErr(err, "delete cert")
-	return true
+	if err != nil {
+		return fmt.Errorf("failed to delete cert: %w", err)
+	}
+	return nil
 }
 
 type windowsRootStore uintptr

@@ -8,6 +8,7 @@ package main
 import (
 	"crypto"
 	"crypto/x509"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -305,31 +306,99 @@ func (m *mkcert) install() {
 }
 
 func (m *mkcert) uninstall() {
-	if storeEnabled("nss") && hasNSS {
-		if hasCertutil {
-			m.uninstallNSS()
-		} else if CertutilInstallHelp != "" {
-			log.Print("")
-			log.Printf(`Warning: "certutil" is not available, so the CA can't be automatically uninstalled from %s (if it was ever installed)! ⚠️`, NSSBrowsers)
-			log.Printf(`You can install "certutil" with "%s" and re-run "mkcert -uninstall" 👈`, CertutilInstallHelp)
-			log.Print("")
+	var uninstalled, skipped, failed int
+	for _, store := range m.uninstallStores() {
+		if ok, reason := store.applicable(); !ok {
+			skipped++
+			log.Printf("Note: skipping the %s: %s. ℹ️", store.name, reason)
+			continue
+		}
+		switch err := store.uninstall(); {
+		case err == nil:
+			uninstalled++
+			log.Printf("The local CA is now uninstalled from the %s! 👋", store.name)
+		case errors.Is(err, errStoreNotApplicable):
+			skipped++
+			log.Printf("Note: skipping the %s: not supported on this platform. ℹ️", store.name)
+		default:
+			failed++
+			log.Printf("Warning: failed to uninstall the local CA from the %s: %s ⚠️", store.name, err)
 		}
 	}
-	if storeEnabled("java") && hasJava {
-		if hasKeytool {
-			m.uninstallJava()
-		} else {
-			log.Print("")
-			log.Println(`Warning: "keytool" is not available, so the CA can't be automatically uninstalled from Java's trust store (if it was ever installed)! ⚠️`)
-			log.Print("")
-		}
+
+	log.Printf("Uninstall summary: %d uninstalled, %d skipped, %d failed.", uninstalled, skipped, failed)
+	log.Print("")
+	if failed > 0 {
+		log.Fatalf("ERROR: the local CA is still installed in %d trust store(s) ⚠️", failed)
 	}
-	if storeEnabled("system") && m.uninstallPlatform() {
-		log.Print("The local CA is now uninstalled from the system trust store(s)! 👋")
-		log.Print("")
-	} else if storeEnabled("nss") && hasCertutil {
-		log.Printf("The local CA is now uninstalled from the %s trust store(s)! 👋", NSSBrowsers)
-		log.Print("")
+}
+
+// errStoreNotApplicable is returned by store uninstall functions when the
+// trust store doesn't exist on this machine, as opposed to an actual
+// uninstall failure, so the store can be reported as skipped.
+var errStoreNotApplicable = errors.New("trust store not applicable on this machine")
+
+// uninstallStep is one entry of the list of trust stores that mkcert knows
+// how to uninstall the local CA from. Every entry is always evaluated and
+// its outcome recorded, so that a skipped store can't silently leave the
+// local CA behind while the output claims a clean uninstall.
+type uninstallStep struct {
+	name string
+	// applicable reports whether the store can be processed on this
+	// machine. If not, the returned reason explains why the step is
+	// skipped (e.g. the store or a required tool is missing).
+	applicable func() (ok bool, reason string)
+	uninstall  func() error
+}
+
+// uninstallStores enumerates all the trust stores mkcert knows how to
+// uninstall the local CA from, covering the platform differences in a
+// single list.
+func (m *mkcert) uninstallStores() []uninstallStep {
+	return []uninstallStep{
+		{
+			name: NSSBrowsers + " trust store(s)",
+			applicable: func() (bool, string) {
+				switch {
+				case !storeEnabled("nss"):
+					return false, "disabled by the TRUST_STORES environment variable"
+				case !hasNSS:
+					return false, "no NSS security databases found on this machine"
+				case !hasCertutil:
+					if CertutilInstallHelp != "" {
+						return false, fmt.Sprintf(`"certutil" is not available (install it with "%s" and re-run "mkcert -uninstall")`, CertutilInstallHelp)
+					}
+					return false, `"certutil" is not available`
+				}
+				return true, ""
+			},
+			uninstall: m.uninstallNSS,
+		},
+		{
+			name: "Java trust store",
+			applicable: func() (bool, string) {
+				switch {
+				case !storeEnabled("java"):
+					return false, "disabled by the TRUST_STORES environment variable"
+				case !hasJava:
+					return false, "Java not found on this machine"
+				case !hasKeytool:
+					return false, `"keytool" is not available`
+				}
+				return true, ""
+			},
+			uninstall: m.uninstallJava,
+		},
+		{
+			name: "system trust store(s)",
+			applicable: func() (bool, string) {
+				if !storeEnabled("system") {
+					return false, "disabled by the TRUST_STORES environment variable"
+				}
+				return true, ""
+			},
+			uninstall: m.uninstallPlatform,
+		},
 	}
 }
 
@@ -365,6 +434,16 @@ func fatalIfCmdErr(err error, cmd string, out []byte) {
 	if err != nil {
 		log.Fatalf("ERROR: failed to execute \"%s\": %s\n\n%s\n", cmd, err, out)
 	}
+}
+
+// cmdErr is the non-fatal counterpart of fatalIfCmdErr, for the uninstall
+// path where a failure is recorded and reported rather than aborting the
+// whole run.
+func cmdErr(err error, cmd string, out []byte) error {
+	if err != nil {
+		return fmt.Errorf("failed to execute %q: %s\n\n%s", cmd, err, out)
+	}
+	return nil
 }
 
 func pathExists(path string) bool {

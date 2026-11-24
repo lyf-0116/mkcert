@@ -74,26 +74,32 @@ func (m *mkcert) installPlatform() bool {
 	return true
 }
 
-func (m *mkcert) uninstallPlatform() bool {
+func (m *mkcert) uninstallPlatform() error {
 	if SystemTrustCommand == nil {
-		return false
+		return errStoreNotApplicable
 	}
 
 	cmd := commandWithSudo("rm", "-f", m.systemTrustFilename())
 	out, err := cmd.CombinedOutput()
-	fatalIfCmdErr(err, "rm", out)
+	if err := cmdErr(err, "rm", out); err != nil {
+		return err
+	}
 
 	// We used to install under non-unique filenames.
 	legacyFilename := fmt.Sprintf(SystemTrustFilename, "mkcert-rootCA")
 	if pathExists(legacyFilename) {
 		cmd := commandWithSudo("rm", "-f", legacyFilename)
 		out, err := cmd.CombinedOutput()
-		fatalIfCmdErr(err, "rm (legacy filename)", out)
+		if err := cmdErr(err, "rm (legacy filename)", out); err != nil {
+			return err
+		}
 	}
 
 	cmd = commandWithSudo(SystemTrustCommand...)
 	out, err = cmd.CombinedOutput()
-	fatalIfCmdErr(err, strings.Join(SystemTrustCommand, " "), out)
+	if err := cmdErr(err, strings.Join(SystemTrustCommand, " "), out); err != nil {
+		return err
+	}
 
-	return true
+	return nil
 }
